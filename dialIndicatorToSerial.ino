@@ -37,6 +37,10 @@
 // ADC threshold, ADC values greater than this are interpreted as logical 1, see loop()
 #define ADC_Threshold 140
 
+// The clock pulse threshold. This is the minimum duration we expect to wait until we
+// see the first bit of a data packet.
+#define Clk_Threshold 5000
+
 // data format
 #define DATA_BITS_LEN 24
 #define INCH_BIT 23
@@ -54,17 +58,59 @@ bool getRawBit() {
     return data;
 }
 
+/**
+ * If the cycle starts in the middle of a data packet, we have to wait until
+ * the next packet arrives to ensure that the data is correct.
+ * 
+ * When we found the start of a new packet, we return the first bit.
+ */
+bool waitForStartOfPacket() {
+    bool data;
+    bool startFound = false;
+
+    // We keep looping until it took long enough to see a clock pulse.
+    while(!startFound) {
+        unsigned long start_high_time = micros();
+        while (analogRead(ClkPin) > ADC_Threshold)
+            ;
+        unsigned long high_time = micros() - start_high_time;
+        while (analogRead(ClkPin) < ADC_Threshold)
+            ;
+        data = analogRead(DataPin) > ADC_Threshold;
+        if (high_time > Clk_Threshold) {
+            startFound = true;
+        }
+    }
+    return data;
+}
+
+/**
+ * Return a complete 24 bit data packet.
+ */
 long getRawData() {
     long out = 0;
-    for (int i = 0; i < DATA_BITS_LEN; i++) {
-        out |= getRawBit() ? 1L << DATA_BITS_LEN : 0L;
-        out >>= 1;
+
+    // Sync with the start of a packet to obtain the first bit.
+    bool firstBit = waitForStartOfPacket();
+    processBit(out, firstBit);
+
+    // Now read the rest of the bits directly.
+    for (int i = 0; i < DATA_BITS_LEN - 1; i++) {
+        bool currentBit = getRawBit();
+        processBit(out, currentBit);
     }
     return out;
 }
 
-long getValue(bool &inch) {
-    long out = getRawData();
+/**
+ * Process a data bit.
+ */
+void processBit(long& out, bool currentBit) {
+        out |= currentBit ? 1L << DATA_BITS_LEN : 0L;
+        out >>= 1;
+}
+
+long getValue(bool &inch, long out) {
     inch = out & (1L << INCH_BIT);
     bool sign = out & (1L << SIGN_BIT);
     out &= (1L << SIGN_BIT) - 1L;
@@ -141,7 +187,9 @@ void loop() {
     bool inch;
     long value;
 
-    value = getValue(inch);
+    long out = getRawData();
+
+    value = getValue(inch, out);
 
     // print time
     Serial.print(millis());
@@ -157,7 +205,7 @@ void loop() {
     //Serial.print(' '); Serial.print(analogRead(ClkPin)/2);
 
     // uncomment if you are interested in raw data bits
-    //Serial.print(' '); printBits(getRawData());
+    //Serial.print(' '); printBits(out);
 
     // uncomment if you are interested in raw data
     //Serial.print(' '); Serial.print(value);

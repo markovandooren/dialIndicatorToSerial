@@ -91,13 +91,11 @@ long getRawData() {
     long out = 0;
 
     // Sync with the start of a packet to obtain the first bit.
-    bool firstBit = waitForStartOfPacket();
-    processBit(out, firstBit);
+    processBit(out, waitForStartOfPacket());
 
     // Now read the rest of the bits directly.
     for (int i = 0; i < DATA_BITS_LEN - 1; i++) {
-        bool currentBit = getRawBit();
-        processBit(out, currentBit);
+        processBit(out, getRawBit());
     }
     return out;
 }

@@ -25,6 +25,15 @@
 // pins - voltage on outputs are ~1.5V so we use the ADC
 #define DataPin A0
 #define ClkPin  A1
+// comment out if you do not connect the reference voltage of the meter to the AREF pin.
+// DO NOT CONNECT AREF WHEN THIS IS COMMENTED OUT. That shorts the external voltage to
+// the internal voltage.
+//
+// Given that we only use the ADC for thresholding the value to 0 or 1, this is not really important.
+// For accurate analog values, it is recommended to use the AREF pin because the internal 1.1v or the
+// Vcc of 5V can vary based on the load of the arduino.
+#define UseArefPin
+
 #define LedPin  13
 
 // Dial Indicator resolution: 100 - 0.01mm, 1000 - 0.001mm
@@ -34,10 +43,21 @@
 // UART speed
 #define UARTBaudRate 115200
 
-// ADC threshold, ADC values greater than this are interpreted as logical 1, see loop()
-#define ADC_Threshold 140
 
-// The clock pulse threshold. This is the minimum duration we expect to wait until we
+#ifdef UseArefPin
+  // ADC high threshold, ADC values greater than this are interpreted as logical 1, see loop()
+  #define ADC_High_Threshold 720
+  // ADC low threshold, ADC values smaller than this are interpreted as logical 0, see loop()
+  #define ADC_Low_Threshold 400
+#else
+  // ADC high threshold, ADC values greater than this are interpreted as logical 1, see loop()
+  #define ADC_High_Threshold 180
+  // ADC low threshold, ADC values smaller than this are interpreted as logical 0, see loop()
+  #define ADC_Low_Threshold 100
+#endif
+
+
+// The clock pulse threshold in microseconds. This is the minimum duration we expect to wait until we
 // see the first bit of a data packet.
 #define Clk_Threshold 5000
 
@@ -47,65 +67,77 @@
 #define SIGN_BIT 20
 #define START_BIT -1 // -1 - no start bit
 
+bool isHigh(int pin) {
+  unsigned long value = analogRead(pin);
+//  Serial.print("h: ");
+//  Serial.println(value);
+  return value > ADC_High_Threshold;
+}
+
+bool isLow(int pin) {
+  unsigned long value = analogRead(pin);
+  //Serial.print("l: ");
+  //Serial.println(value);
+  return value < ADC_Low_Threshold;
+}
+
 // data capture and decode functions
 bool getRawBit() {
-    bool data;
-    while (analogRead(ClkPin) > ADC_Threshold)
-        ;
-    while (analogRead(ClkPin) < ADC_Threshold)
-        ;
-    data = analogRead(DataPin) > ADC_Threshold;
-    return data;
+  bool data;
+  while (isHigh(ClkPin))
+    ;
+  while (isLow(ClkPin))
+    ;
+  data = isHigh(DataPin);
+  return data;
 }
 
 /**
- * If the cycle starts in the middle of a data packet, we have to wait until
- * the next packet arrives to ensure that the data is correct.
- * 
- * When we found the start of a new packet, we return the first bit.
- */
+   If the cycle starts in the middle of a data packet, we have to wait until
+   the next packet arrives to ensure that the data is correct.
+
+   When we found the start of a new packet, we return the first bit.
+*/
 bool waitForStartOfPacket() {
-    bool data;
-    bool startFound = false;
+  bool data;
+  bool startFound = false;
 
-    // We keep looping until it took long enough to see a clock pulse.
-    while(!startFound) {
-        unsigned long start_high_time = micros();
-        while (analogRead(ClkPin) > ADC_Threshold)
-            ;
-        unsigned long high_time = micros() - start_high_time;
-        while (analogRead(ClkPin) < ADC_Threshold)
-            ;
-        data = analogRead(DataPin) > ADC_Threshold;
-        if (high_time > Clk_Threshold) {
-            startFound = true;
-        }
-    }
-    return data;
+  // We keep looping until it took long enough to see a clock pulse.
+  while (!startFound) {
+    unsigned long start_high_time = micros();
+    while (isHigh(ClkPin))
+      ;
+    unsigned long high_time = micros() - start_high_time;
+    while (isLow(ClkPin))
+      ;
+    data = isHigh(DataPin);
+    startFound = high_time > Clk_Threshold;
+  }
+  return data;
 }
 
 /**
- * Return a complete 24 bit data packet.
- */
+   Return a complete 24 bit data packet.
+*/
 long getRawData() {
-    long out = 0;
+  long out = 0;
 
-    // Sync with the start of a packet to obtain the first bit.
-    processBit(out, waitForStartOfPacket());
+  // Sync with the start of a packet to obtain the first bit.
+  processBit(out, waitForStartOfPacket());
 
-    // Now read the rest of the bits directly.
-    for (int i = 0; i < DATA_BITS_LEN - 1; i++) {
-        processBit(out, getRawBit());
-    }
-    return out;
+  // Now read the rest of the bits directly.
+  for (int i = 0; i < DATA_BITS_LEN - 1; i++) {
+    processBit(out, getRawBit());
+  }
+  return out;
 }
 
 /**
- * Process a data bit.
- */
+   Process a data bit.
+*/
 void processBit(long& out, bool currentBit) {
-        out |= currentBit ? 1L << DATA_BITS_LEN : 0L;
-        out >>= 1;
+  out |= currentBit ? 1L << DATA_BITS_LEN : 0L;
+  out >>= 1;
 }
 
 long getValue(bool &inch, long out) {
@@ -175,9 +207,13 @@ void setup() {
     cbi(ADCSRA, ADPS1);
     cbi(ADCSRA, ADPS0);
 
+#ifdef UseArefPin
+  analogReference(EXTERNAL);
+#endif
+  
     Serial.begin(UARTBaudRate);
 #ifdef LedPin
-    pinMode(LedPin, OUTPUT);
+  pinMode(LedPin, OUTPUT);
 #endif
 }
 
